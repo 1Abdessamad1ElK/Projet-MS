@@ -1,0 +1,153 @@
+# =====================================================================
+#  Plateforme de mobilite multimodale - NOS services.
+#  Docker Compose charge ce fichier automatiquement a cote de
+#  docker-compose.yml (fourni, NON modifie) :
+#
+#       docker compose up --build        <- demarre TOUTE la plateforme
+#
+#  Acces (depuis votre machine) :
+#    API Gateway ........ http://localhost:8080   (point d'entree unique)
+#    rail-bridge ........ http://localhost:8101   (CORBA -> REST)
+#    air-bridge ......... http://localhost:8102   (SOAP  -> REST)
+#    carshare-service ... http://localhost:8103
+#    pricing-service .... http://localhost:8104
+#    reservations ....... http://localhost:8105   (saga)
+#    notifications ...... http://localhost:8106
+#    RabbitMQ UI ........ http://localhost:15672  (guest / guest)
+#    Jaeger (traces) .... http://localhost:16686
+#
+#  Lot 0 (client CORBA lance sur VOTRE machine, hors Docker) :
+#    CORBA_ADVERTISED_HOST=localhost docker compose up --build
+#  (par defaut "rail" : correct pour les services dans Docker, dont rail-bridge)
+# =====================================================================
+
+x-otel: &otel
+  OTEL_EXPORTER_OTLP_ENDPOINT: http://jaeger:4318
+  OTEL_EXPORTER_OTLP_PROTOCOL: http/protobuf
+  OTEL_METRICS_EXPORTER: none
+  OTEL_LOGS_EXPORTER: none
+
+services:
+
+  # ---- legacy : seule surcharge = hote annonce dans l'IOR configurable ----
+  rail:
+    environment:
+      CORBA_ADVERTISED_HOST: ${CORBA_ADVERTISED_HOST:-rail}
+
+  # ---- infrastructure ----
+  rabbitmq:
+    image: rabbitmq:3.13-management
+    container_name: rabbitmq
+    ports:
+      - "5672:5672"
+      - "15672:15672"
+    healthcheck:
+      test: ["CMD", "rabbitmq-diagnostics", "-q", "ping"]
+      interval: 10s
+      timeout: 10s
+      retries: 12
+
+  jaeger:
+    image: jaegertracing/all-in-one:1.57
+    container_name: jaeger
+    environment:
+      COLLECTOR_OTLP_ENABLED: "true"
+    ports:
+      - "16686:16686"   # interface web
+      - "4317:4317"     # OTLP gRPC
+      - "4318:4318"     # OTLP HTTP
+
+  # ---- bridges (couche d'integration / anti-corruption) ----
+  rail-bridge:
+    build:
+      context: .                       # racine du depot : il faut l'IDL fourni
+      dockerfile: rail-bridge/Dockerfile
+    container_name: rail-bridge
+    environment:
+      <<: *otel
+      OTEL_SERVICE_NAME: rail-bridge
+    volumes:
+      - ./ior:/ior:ro                  # IOR publie par le serveur ferroviaire
+    ports:
+      - "8101:8080"
+    depends_on:
+      - rail
+
+  air-bridge:
+    build: ./air-bridge
+    container_name: air-bridge
+    environment:
+      <<: *otel
+      OTEL_SERVICE_NAME: air-bridge
+      AIR_SOAP_URL: http://air:8080/ws
+    ports:
+      - "8102:8080"
+    depends_on:
+      - air
+
+  # ---- microservices internes (une base H2 PAR service) ----
+  carshare-service:
+    build: ./carshare-service
+    container_name: carshare-service
+    environment:
+      <<: *otel
+      OTEL_SERVICE_NAME: carshare-service
+    ports:
+      - "8103:8080"
+
+  pricing-service:
+    build: ./pricing-service
+    container_name: pricing-service
+    environment:
+      <<: *otel
+      OTEL_SERVICE_NAME: pricing-service
+    ports:
+      - "8104:8080"
+
+  notification-service:
+    build: ./notification-service
+    container_name: notification-service
+    environment:
+      <<: *otel
+      OTEL_SERVICE_NAME: notification-service
+    ports:
+      - "8106:8080"
+    depends_on:
+      rabbitmq:
+        condition: service_healthy
+
+  # ---- orchestrateur de saga ----
+  reservations-service:
+    build: ./reservations-service
+    container_name: reservations-service
+    environment:
+      <<: *otel
+      OTEL_SERVICE_NAME: reservations-service
+    ports:
+      - "8105:8080"
+    depends_on:
+      rabbitmq:
+        condition: service_healthy
+      rail-bridge:
+        condition: service_started
+      air-bridge:
+        condition: service_started
+      carshare-service:
+        condition: service_started
+      pricing-service:
+        condition: service_started
+
+  # ---- API Gateway / BFF : point d'entree unique ----
+  gateway:
+    build: ./gateway
+    container_name: gateway
+    environment:
+      <<: *otel
+      OTEL_SERVICE_NAME: gateway
+    ports:
+      - "8080:8080"
+    depends_on:
+      - reservations-service
+      - rail-bridge
+      - air-bridge
+      - carshare-service

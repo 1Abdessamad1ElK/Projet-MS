@@ -1,0 +1,67 @@
+### Scenario de demo pour le client HTTP d'IntelliJ (ouvrir ce fichier, cliquer sur le triangle vert).
+### Lancer d'abord la requete "login" : le jeton est memorise pour les suivantes.
+
+### 1. Login
+POST http://localhost:8080/api/v1/auth/login
+Content-Type: application/json
+
+{"username":"demo","password":"demo123"}
+
+> {% client.global.set("token", response.body.token); %}
+
+### 2. Recherche agregee (train + vol + voiture)
+GET http://localhost:8080/api/v1/search?origin=Casablanca&via=Rabat&destination=Paris&date=2026-11-15
+Authorization: Bearer {{token}}
+
+### 3. Reservation nominale -> 201 CONFIRMED
+POST http://localhost:8080/api/v1/reservations
+Authorization: Bearer {{token}}
+Content-Type: application/json
+Idempotency-Key: http-nominal-1
+
+{
+  "customerEmail": "voyageur@example.ma",
+  "legs": [
+    {"mode":"TRAIN",  "offerId":"RAIL-CAS-RAB-0730", "seats":1, "origin":"Casablanca","destination":"Rabat", "date":"2026-11-15"},
+    {"mode":"FLIGHT", "offerId":"AIR-RBA-ORY-1200",  "seats":1, "origin":"Rabat",     "destination":"Paris", "date":"2026-11-15"},
+    {"mode":"CAR",    "offerId":"CAR-PAR-001",       "seats":1, "origin":"Paris",     "destination":"Paris", "date":"2026-11-15"}
+  ]
+}
+
+### 4. Echec A : vol sans assez de places -> 409, train annule
+POST http://localhost:8080/api/v1/reservations
+Authorization: Bearer {{token}}
+Content-Type: application/json
+Idempotency-Key: http-fail-hold-1
+
+{
+  "customerEmail": "voyageur@example.ma",
+  "legs": [
+    {"mode":"TRAIN",  "offerId":"RAIL-CAS-RAB-0730", "seats":4, "origin":"Casablanca","destination":"Rabat",  "date":"2026-11-15"},
+    {"mode":"FLIGHT", "offerId":"AIR-CMN-MAD-1800",  "seats":4, "origin":"Casablanca","destination":"Madrid", "date":"2026-11-15"},
+    {"mode":"CAR",    "offerId":"CAR-MAD-001",       "seats":1, "origin":"Madrid",    "destination":"Madrid", "date":"2026-11-15"}
+  ]
+}
+
+### 5. Echec B : voiture en panne au confirm -> 409, tout annule
+POST http://localhost:8080/api/v1/reservations
+Authorization: Bearer {{token}}
+Content-Type: application/json
+Idempotency-Key: http-fail-confirm-1
+
+{
+  "customerEmail": "voyageur@example.ma",
+  "legs": [
+    {"mode":"TRAIN",  "offerId":"RAIL-CAS-RAB-0900", "seats":1, "origin":"Casablanca","destination":"Rabat", "date":"2026-11-15"},
+    {"mode":"FLIGHT", "offerId":"AIR-RBA-ORY-1200",  "seats":1, "origin":"Rabat",     "destination":"Paris", "date":"2026-11-15"},
+    {"mode":"CAR",    "offerId":"CAR-PAR-FAULTY",    "seats":1, "origin":"Paris",     "destination":"Paris", "date":"2026-11-15"}
+  ]
+}
+
+### 6. Tous les dossiers
+GET http://localhost:8080/api/v1/reservations
+Authorization: Bearer {{token}}
+
+### 7. Notifications
+GET http://localhost:8080/api/v1/notifications
+Authorization: Bearer {{token}}

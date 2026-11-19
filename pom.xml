@@ -1,0 +1,30 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  Agregateur Maven : permet d'ouvrir TOUT le projet dans IntelliJ (File > Open > ce pom.xml)
+  et de lancer les tests de tous les modules d'un coup :  mvn test
+  Chaque module reste independant (son propre parent Spring Boot) ; les systemes
+  fournis (rail-operator-corba, air-partner-soap) ne sont volontairement PAS inclus.
+  Attention : rail-bridge se compile en Java 8, les autres en Java 17 (voir ADR-004).
+  -> en local, utilisez `mvn test -pl pricing-service,reservations-service` avec un JDK 17,
+     et `mvn test -pl rail-bridge` avec un JDK 8.
+-->
+<project xmlns="http://maven.apache.org/POM/4.0.0"
+         xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+         xsi:schemaLocation="http://maven.apache.org/POM/4.0.0 http://maven.apache.org/xsd/maven-4.0.0.xsd">
+  <modelVersion>4.0.0</modelVersion>
+
+  <groupId>ma.mobility</groupId>
+  <artifactId>mobility-platform</artifactId>
+  <version>1.0.0</version>
+  <packaging>pom</packaging>
+
+  <modules>
+    <module>rail-bridge</module>
+    <module>air-bridge</module>
+    <module>carshare-service</module>
+    <module>pricing-service</module>
+    <module>reservations-service</module>
+    <module>notification-service</module>
+    <module>gateway</module>
+  </modules>
+</project>

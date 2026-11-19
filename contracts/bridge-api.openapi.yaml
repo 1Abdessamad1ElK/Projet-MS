@@ -1,0 +1,131 @@
+openapi: 3.0.3
+info:
+  title: Contrat commun des bridges / services de reservation (modele canonique)
+  version: 1.0.0
+  description: |
+    UNE SEULE interface REST, implementee par :
+      - rail-bridge     (traduit vers CORBA)      port 8101
+      - air-bridge      (traduit vers SOAP)       port 8102
+      - carshare-service (natif REST)             port 8103
+    L'orchestrateur de saga (reservations-service) ne connait QUE ce contrat :
+    il ne "voit" jamais ni CORBA ni SOAP (couche anti-corruption).
+    Voir docs/04-modele-canonique.md.
+servers:
+  - url: http://localhost:8101/api/v1
+    description: exemple (rail-bridge)
+
+paths:
+  /offers:
+    get:
+      summary: Rechercher des offres
+      parameters:
+        - { name: origin,      in: query, required: true, schema: { type: string }, example: Casablanca }
+        - { name: destination, in: query, required: true, schema: { type: string }, example: Rabat }
+        - { name: date,        in: query, required: true, schema: { type: string, format: date }, example: "2026-11-15" }
+      responses:
+        "200":
+          description: Liste (eventuellement vide) d'offres
+          content:
+            application/json:
+              schema:
+                type: array
+                items: { $ref: "#/components/schemas/Offer" }
+
+  /holds:
+    post:
+      summary: Maintenir temporairement des places (phase 1 de la saga)
+      description: Le maintien expire apres 10 minutes cote partenaires.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/HoldRequest" }
+      responses:
+        "201":
+          description: Maintien obtenu
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Hold" }
+        "409":
+          description: Plus de places / offre inconnue (NotAvailable cote legacy)
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Problem" }
+
+  /holds/{holdId}/confirmation:
+    post:
+      summary: Confirmer un maintien (phase 2 de la saga)
+      parameters:
+        - { name: holdId, in: path, required: true, schema: { type: string } }
+      responses:
+        "200":
+          description: Reservation ferme
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Booking" }
+        "409":
+          description: Maintien expire ou inconnu
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Problem" }
+
+  /cancellations:
+    post:
+      summary: Annuler (compensation) - IDEMPOTENT
+      description: |
+        Accepte un holdId OU un bookingRef. Rejouer l'appel renvoie TOUJOURS 204,
+        meme si la reference est inconnue ou deja annulee.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [reference]
+              properties:
+                reference: { type: string, example: "HOLD-1234" }
+      responses:
+        "204":
+          description: Annule (ou deja annule)
+
+components:
+  schemas:
+    Offer:
+      type: object
+      required: [offerId, mode, origin, destination, departure, arrival, priceMinor, currency, seatsAvailable]
+      properties:
+        offerId:        { type: string, example: RAIL-CAS-RAB-0730, description: "= identifiant legacy (tripId / flightId)" }
+        mode:           { type: string, enum: [TRAIN, FLIGHT, CAR] }
+        origin:         { type: string, example: Casablanca }
+        destination:    { type: string, example: Rabat }
+        departure:      { type: string, example: "2026-11-15T07:30:00", description: "ISO-8601, sans fuseau (comme le legacy)" }
+        arrival:        { type: string, example: "2026-11-15T08:25:00" }
+        priceMinor:     { type: integer, format: int64, example: 8000, description: "centimes de MAD" }
+        currency:       { type: string, example: MAD }
+        seatsAvailable: { type: integer, example: 120 }
+    HoldRequest:
+      type: object
+      required: [offerId, seats]
+      properties:
+        offerId: { type: string, example: RAIL-CAS-RAB-0730 }
+        seats:   { type: integer, minimum: 1, example: 2 }
+    Hold:
+      type: object
+      required: [holdId, offerId, mode]
+      properties:
+        holdId:  { type: string }
+        offerId: { type: string }
+        mode:    { type: string, enum: [TRAIN, FLIGHT, CAR] }
+    Booking:
+      type: object
+      required: [bookingRef, holdId, mode]
+      properties:
+        bookingRef: { type: string }
+        holdId:     { type: string }
+        mode:       { type: string, enum: [TRAIN, FLIGHT, CAR] }
+    Problem:
+      type: object
+      description: Erreur au format simple (inspire de RFC 7807)
+      properties:
+        code:   { type: string, example: NOT_AVAILABLE }
+        detail: { type: string, example: "Plus de places" }
